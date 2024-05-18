@@ -18,6 +18,9 @@ struct Cli {
 
     #[clap(long)]
     detect_similar_images: bool,
+
+    #[clap(long)]
+    search: Option<PathBuf>,
 }
 
 type PdqHash = ([u8; 32], f32);
@@ -76,13 +79,14 @@ fn main() -> Result<()> {
 
 
     println!("Calculating hashes...");
+    let need_perception_hash = cli.detect_similar_images || cli.search.is_some();
     let data: Vec<_> = data
         .into_par_iter()
         .progress()
         .filter_map(|file| {
             let result = (move || -> Result<_>{
                 let mut file = file?;
-                file.hash(cli.detect_similar_images)?;
+                file.hash(need_perception_hash)?;
                 Ok(file)
             })();
 
@@ -101,11 +105,41 @@ fn main() -> Result<()> {
 
     println!("Hashed {} files ({})", num_files, HumanBytes(total_size as u64));
 
+    if let Some(needle) = cli.search {
 
-    if cli.detect_similar_images {
-        build_perception_groups(&data, &cli);
+        let mut needle = FileData::from_file(needle);
+        needle.hash(true).expect("Expected searched image to be an image");
+
+        const ALLOWED_DISTANCE: u64 = 3;
+
+        let mut images: Vec<_> = data.iter().filter(|o| o.perception_hash.is_some()).collect();
+
+        println!("Found {} images in dataset", images.len());
+
+        images.retain(|other| {
+            hamming::distance(
+                &other.perception_hash.unwrap().0,
+                &needle.perception_hash.unwrap().0,
+            ) <= ALLOWED_DISTANCE
+        });
+
+        if images.is_empty() {
+            println!("Found no simlar images");
+        } else {
+            println!("Found {} similar image(s)", images.len());
+
+            for i in images {
+                println!("{}", i.path.display());
+            }
+        }
+
+
     } else {
-        build_exact_groups(&data, &cli);
+        if cli.detect_similar_images {
+            build_perception_groups(&data, &cli);
+        } else {
+            build_exact_groups(&data, &cli);
+        }
     }
 
 
